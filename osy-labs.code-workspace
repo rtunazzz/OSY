@@ -1,0 +1,29 @@
+{
+	"folders": [
+		{
+			"name": "c01-threadbase",
+			"path": "c01-threadbase"
+		},
+		{
+			"name": "c02",
+			"path": "c02"
+		},
+		{
+			"name": "c03",
+			"path": "c03"
+		},
+		{
+			"name": "c04",
+			"path": "c04"
+		},
+		{
+			"name": "progtest_solver",
+			"path": "progtest_solver"
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"thread": "cpp"
+		}
+	}
+}
