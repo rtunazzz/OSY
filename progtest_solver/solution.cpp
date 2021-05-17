@@ -79,6 +79,9 @@ class CCargoPlanner {
 
     vector<ACustomer> m_Customers;
 
+    map<string, pair<int, vector<CCargo>>> m_DestCargoData;
+    mutex m_DMtx;
+
     queue<JobInfo> m_JobQueue;
     mutex m_QMtx;
     condition_variable m_QCond;
@@ -87,8 +90,8 @@ class CCargoPlanner {
     void salesman(int index);
 
     void handleDestination(AShip& ship);
-    void handleQuote(const ACustomer& customer, AShip& ship);
-    void handleLoad(const vector<CCargo>& cargo, AShip& ship);
+    void handleQuote(const ACustomer& customer, AShip& ship, int shipCustomerCnt);
+    void handleLoad(AShip& ship);
 
    public:
     static int SeqSolver(const vector<CCargo>& cargo,
@@ -104,62 +107,81 @@ class CCargoPlanner {
 };
 
 void CCargoPlanner::worker(int index) {
-    cout << "[" << index << "]"
-         << " Worked started." << endl;
+    // cout << "[" << index << "]"
+    //      << " Worked started." << endl;
 
     while (true) {
         unique_lock<mutex> qlock(m_QMtx);
         m_QCond.wait(qlock, [this] { return (!m_JobQueue.empty()) && (m_JobQueue.front().forWorker); });
 
         JobInfo jobData = m_JobQueue.front();
-        cout << "[" << index << "] W - " << m_JobQueue.size() << " - Found a job, done: " << (jobData.done ? "YES" : "Not yet...") << endl;
+        // cout << "[" << index << "] W - " << m_JobQueue.size() << " - Found a job, done: " << (jobData.done ? "YES" : "Not yet...") << endl;
         if (jobData.done) {
             break;
         }
-        // cout << "[" << index << "] W - " << m_JobQueue.size() << " - Job assigned" << endl;
         m_JobQueue.pop();
-        // unlock the queue since we don't need it locked anymore
-        qlock.unlock();
+        // cout << "[" << index << "] W - " << m_JobQueue.size() << " - Job assigned" << endl;
+
+        if (m_JobQueue.empty()) {
+            cout << "[" << index << "] S - Queue is empty! Notifying all." << endl;
+            // unlock the queue since we don't need it locked anymore
+            qlock.unlock();
+            m_QCond.notify_all();
+        } else {
+            // unlock the queue since we don't need it locked anymore
+            qlock.unlock();
+        }
 
         // do the job
         jobData.job();
         // cout << "[" << index << "] S - Job done." << endl;
     }
 
-    cout << "[" << index << "]"
-         << " Salesman ended." << endl;
+    // cout << "[" << index << "]"
+    //      << " Worker ended." << endl;
 }
 
 void CCargoPlanner::salesman(int index) {
-    cout << "[" << index << "]"
-         << " Salesman started." << endl;
+    // cout << "[" << index << "]"
+    //      << " Salesman started." << endl;
 
     while (true) {
         unique_lock<mutex> qlock(m_QMtx);
         m_QCond.wait(qlock, [this] { return (!m_JobQueue.empty()) && (m_JobQueue.front().forSales); });
 
         JobInfo jobData = m_JobQueue.front();
-        cout << "[" << index << "] S - " << m_JobQueue.size() << " - Found a job, done: " << (jobData.done ? "YES" : "Not yet...") << endl;
+        // cout << "[" << index << "] S - " << m_JobQueue.size() << " - Found a job, done: " << (jobData.done ? "YES" : "Not yet...") << endl;
         if (jobData.done) {
             break;
         }
-        // cout << "[" << index << "] S - " << m_JobQueue.size() << " - Job assigned" << endl;
         m_JobQueue.pop();
+        // cout << "[" << index << "] S - " << m_JobQueue.size() << " - Job assigned" << endl;
 
-        // unlock the queue since we don't need it locked anymore
-        qlock.unlock();
+        if (m_JobQueue.empty()) {
+            cout << "[" << index << "] S - Queue is empty! Notifying all." << endl;
+            // unlock the queue since we don't need it locked anymore
+            qlock.unlock();
+            m_QCond.notify_all();
+        } else {
+            // unlock the queue since we don't need it locked anymore
+            qlock.unlock();
+        }
 
         // do the job
         jobData.job();
         // cout << "[" << index << "] S - Job done." << endl;
     }
 
-    cout << "[" << index << "]"
-         << " Salesman ended." << endl;
+    // cout << "[" << index << "]"
+    //      << " Salesman ended." << endl;
 }
 
 void CCargoPlanner::handleDestination(AShip& ship) {
-    cout << "Adding jobs to quote " << m_Customers.size() << " customers for destination " << ship->Destination() << endl;
+    // Salesman method
+
+    int customerCnt = m_Customers.size();
+
+    // cout << "Adding jobs to quote " << customerCnt << " customers for destination " << ship->Destination() << endl;
     // Create a job to handle quoting for each customer
     for (auto const& it : m_Customers) {
         unique_lock<mutex> qlock(m_QMtx);
@@ -167,35 +189,62 @@ void CCargoPlanner::handleDestination(AShip& ship) {
             /* forWorker */ false,
             /* forSales */ true,
             /* done */ false,
-            /* job */ bind(&CCargoPlanner::handleQuote, this, it, ship));
-        cout << m_JobQueue.size() << " Job handleQuote to " << ship->Destination() << " added" << endl;
+            /* job */ bind(&CCargoPlanner::handleQuote, this, it, ship, customerCnt));
+        cout << "Job handleQuote to " << ship->Destination() << " added" << endl;
+    }
+
+    m_QCond.notify_all();
+}
+
+void CCargoPlanner::handleQuote(const ACustomer& customer, AShip& ship, int shipCustomerCnt) {
+    // Salesman method
+
+    vector<CCargo> quotedCargo;
+    cout << ship->Destination() << " Quoting a customer for destination" << endl;
+    customer->Quote(ship->Destination(), quotedCargo);
+    cout << ship->Destination() << " Customer quoted" << endl;
+
+    // merge vectors together
+    unique_lock<mutex> dlock(m_DMtx);
+    auto& cargoData = m_DestCargoData[ship->Destination()];
+    auto& dataVector = cargoData.second;
+
+    dataVector.insert(dataVector.end(), quotedCargo.begin(), quotedCargo.end());
+    cargoData.first += 1;
+    cout << ship->Destination() << " - count is currently " << cargoData.first << " (" << shipCustomerCnt << ")" << endl;
+
+    if (cargoData.first == shipCustomerCnt) {
+        unique_lock<mutex> qlock(m_QMtx);
+        m_JobQueue.emplace(
+            /* forWorker */ true,
+            /* forSales */ false,
+            /* done */ false,
+            /* job */ bind(&CCargoPlanner::handleLoad, this, ship));
+
+        cout << m_JobQueue.size() << " Job handleLoad to " << ship->Destination() << " added" << endl;
+
+        qlock.unlock();
         m_QCond.notify_one();
     }
 }
 
-void CCargoPlanner::handleQuote(const ACustomer& customer, AShip& ship) {
-    cout << "Quoting a customer for destination " << ship->Destination() << endl;
-    vector<CCargo> quotedCargo;
-    customer->Quote(ship->Destination(), quotedCargo);
+void CCargoPlanner::handleLoad(AShip& ship) {
+    // Worker method
 
-    unique_lock<mutex> qlock(m_QMtx);
-    m_JobQueue.emplace(
-        /* forWorker */ true,
-        /* forSales */ false,
-        /* done */ false,
-        /* job */ bind(&CCargoPlanner::handleLoad, this, quotedCargo, ship));
-
-    cout << m_JobQueue.size() << " Job handleLoad to " << ship->Destination() << " added" << endl;
-
-    m_QCond.notify_one();
-}
-
-void CCargoPlanner::handleLoad(const vector<CCargo>& cargo, AShip& ship) {
     // cout << "Handling load for destination: " << ship->Destination() << endl;
-    vector<CCargo> load;
-    int fees = SeqSolver(cargo, ship->MaxWeight(), ship->MaxVolume(), load);
+    vector<CCargo> finalLoad;
+
+    unique_lock<mutex> dlock(m_DMtx);
+    const auto& cargo = m_DestCargoData[ship->Destination()].second;
+    dlock.unlock();
+
+    int fees = SeqSolver(cargo, ship->MaxWeight(), ship->MaxVolume(), finalLoad);
     cout << "Loading ship to '" << ship->Destination() << "' with fees: " << fees << endl;
-    ship->Load(load);
+
+    ship->Load(finalLoad);
+
+    // why does this fix it
+    // m_QCond.notify_one();
 }
 
 // Tests our algorithm for loading ships
@@ -228,10 +277,13 @@ void CCargoPlanner::Stop(void) {
     //  = fill all ships we currently have
     //  and join threads back into the main thread
     // wait till the queue is empty
-    cout << "Waiting for queue to be empty..." << endl;
+    cout << "[STOP] Waiting for queue to be empty..." << endl;
+
     unique_lock<mutex> qlock(m_QMtx);
     m_QCond.wait(qlock, [this] { return (m_JobQueue.empty()); });
-    cout << m_JobQueue.size() << " Queue is empty!" << endl;
+
+    cout << "[STOP] " << m_JobQueue.size() << " Queue is empty!" << endl;
+
     // add a new end "job" for all workers
     m_JobQueue.emplace(
         /* forWorker */ true,
@@ -273,6 +325,8 @@ void CCargoPlanner::Ship(AShip ship) {
         /* forSales */ true,
         /* done */ false,
         /* job */ bind(&CCargoPlanner::handleDestination, this, ship));
+
+    qlock.unlock();
     m_QCond.notify_one();
     // cout << "Job for destination " << ship->Destination() << " added & notified one." << endl;
 }
