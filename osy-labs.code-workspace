@@ -23,7 +23,12 @@
 	],
 	"settings": {
 		"files.associations": {
-			"thread": "cpp"
+			"thread": "cpp",
+			"functional": "cpp",
+			"iostream": "cpp",
+			"atomic": "cpp",
+			"condition_variable": "cpp",
+			"ostream": "cpp"
 		}
 	}
 }
